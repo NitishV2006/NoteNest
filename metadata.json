@@ -1,0 +1,5 @@
+{
+  "name": "Note Nest",
+  "description": "A full-stack web application for students and faculty to share and access academic notes, with an administrative backend for management.",
+  "requestFramePermissions": []
+}
