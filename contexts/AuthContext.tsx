@@ -57,24 +57,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     setLoading(true);
-    const fetchInitialSession = async () => {
-        try {
-            const { data: { session } } = await supabase.auth.getSession();
-            await handleAuthChange(session);
-        } catch (e) {
-            console.error("Error fetching initial session:", e);
-            setUser(null);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    fetchInitialSession();
-
     const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
       await handleAuthChange(session);
-      // When auth state changes (login/logout), we are no longer in the initial loading state.
-      if (loading) setLoading(false);
+      setLoading(false);
     });
 
     return () => {
@@ -118,11 +103,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    // The onAuthStateChange listener is the single source of truth for the user state.
-    // It will set the user to null when the 'SIGNED_OUT' event is received.
-    // This function's only job is to call the API, which will trigger the event.
-    // Errors from api.logout() will be propagated and should be handled by the caller.
     await api.logout();
+    // By setting user to null here, we avoid a race condition where navigation
+    // occurs before the onAuthStateChange listener has updated the state.
+    setUser(null);
   };
   
   const updateProfile = async (data: Partial<User>) => {

@@ -1,9 +1,8 @@
 
-
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
 import { User, Note, UserRole, Department } from '../types';
-import { DeleteIcon } from './Icons';
+import { DeleteIcon, UsersIcon, ClipboardListIcon, BuildingLibraryIcon } from './Icons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
 import { DepartmentManagement } from './DepartmentManagement';
@@ -125,16 +124,8 @@ const UserManagement: React.FC = () => {
 
 const NoteManagement: React.FC = () => {
     const [notes, setNotes] = useState<Note[]>([]);
-    const [departments, setDepartments] = useState<Department[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-
-    const departmentMap = useMemo(() => 
-        departments.reduce((acc, dept) => {
-            acc[dept.id] = dept.name;
-            return acc;
-        }, {} as Record<string, string>), 
-    [departments]);
 
     const fetchAllData = useCallback(async () => {
         setLoading(true);
@@ -142,19 +133,9 @@ const NoteManagement: React.FC = () => {
         try {
             const fetchedNotes = await api.getAllNotes();
             setNotes(fetchedNotes);
-
-            // Departments are for enrichment. Fetch them separately so that if they fail,
-            // the notes still render correctly.
-            try {
-                const fetchedDepartments = await api.getDepartments();
-                setDepartments(fetchedDepartments);
-            } catch (deptErr) {
-                console.warn("Could not fetch departments for admin dashboard:", deptErr);
-                // This is a non-critical failure. The table will show N/A for department names.
-            }
         } catch (err) {
             console.error("Failed to fetch admin data:", err);
-            setError("Could not load content data. This might be due to a server permission issue.");
+            setError(err instanceof Error ? err.message : "Could not load content data. This might be due to a server permission issue.");
         } finally {
             setLoading(false);
         }
@@ -174,20 +155,25 @@ const NoteManagement: React.FC = () => {
 
     }, [fetchAllData]);
 
-    const handleDeleteNote = async (noteId: string, filePath: string) => {
+    const handleDeleteNote = async (noteId: string) => {
         if (window.confirm('Are you sure you want to delete this note?')) {
             try {
-                await api.deleteNote(noteId, filePath);
+                await api.deleteNote(noteId);
                 // Realtime subscription will trigger a refetch
             } catch(e) {
                 console.error("Error deleting note:", e);
-                alert("Could not delete the note.");
+                alert(`Could not delete the note: ${e instanceof Error ? e.message : 'Unknown error'}`);
             }
         }
     };
 
     if (loading) return <div className="text-center p-4">Loading notes...</div>;
-    if (error) return <div className="text-center p-4 text-red-600 bg-red-50 rounded-lg">{error}</div>;
+    if (error) return (
+        <div className="text-center p-8 text-red-600 bg-red-50 rounded-lg shadow border border-red-200">
+            <h3 className="font-bold text-lg">Could Not Load Content</h3>
+            <p className="mt-2 whitespace-pre-wrap text-left">{error}</p>
+        </div>
+    );
 
     return (
         <div className="bg-white p-6 rounded-lg shadow-md">
@@ -197,7 +183,7 @@ const NoteManagement: React.FC = () => {
                      <thead className="bg-gray-50">
                         <tr>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Faculty ID</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Faculty</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Upload Date</th>
                             <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -207,11 +193,13 @@ const NoteManagement: React.FC = () => {
                         {notes.map(note => (
                             <tr key={note.id}>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{note.title}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs" title={note.faculty_id}>{note.faculty_id}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{departmentMap[note.department_id] || 'N/A'}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500" title={note.faculty_id}>
+                                    {note.faculty_name || 'N/A'}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{note.department_name || 'N/A'}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(note.created_at).toLocaleDateString()}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                    <button onClick={() => handleDeleteNote(note.id, note.file_path)} className="text-red-600 hover:text-red-900"><DeleteIcon /></button>
+                                    <button onClick={() => handleDeleteNote(note.id)} className="text-red-600 hover:text-red-900"><DeleteIcon /></button>
                                 </td>
                             </tr>
                         ))}
@@ -222,24 +210,116 @@ const NoteManagement: React.FC = () => {
     );
 };
 
+const StatCard: React.FC<{ title: string; value: string | number; icon: React.ReactNode; colorClasses: string }> = ({ title, value, icon, colorClasses }) => (
+    <div className="bg-white p-5 rounded-xl shadow-md flex items-center space-x-4 transition-transform transform hover:-translate-y-1">
+        <div className={`p-3 rounded-full ${colorClasses}`}>
+            {icon}
+        </div>
+        <div>
+            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">{title}</p>
+            <p className="text-3xl font-bold text-gray-900">{value}</p>
+        </div>
+    </div>
+);
+
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('users');
+  const [stats, setStats] = useState({ users: 0, notes: 0, departments: 0 });
+  const [statsLoading, setStatsLoading] = useState(true);
+  
+  const fetchStats = useCallback(async () => {
+    try {
+        const [usersCount, notesCount, departmentsCount] = await Promise.all([
+            api.getUsersCount(),
+            api.getNotesCount(),
+            api.getDepartmentsCount()
+        ]);
+        setStats({ users: usersCount, notes: notesCount, departments: departmentsCount });
+    } catch (error) {
+        console.error("Failed to fetch dashboard stats:", error);
+    } finally {
+        setStatsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStats();
+    
+    const usersChannel = supabase.channel('public:profiles:stats')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, fetchStats).subscribe();
+    const notesChannel = supabase.channel('public:notes:stats')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'notes' }, fetchStats).subscribe();
+    const departmentsChannel = supabase.channel('public:departments:stats')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'departments' }, fetchStats).subscribe();
+        
+    return () => {
+        supabase.removeChannel(usersChannel);
+        supabase.removeChannel(notesChannel);
+        supabase.removeChannel(departmentsChannel);
+    };
+  }, [fetchStats]);
+
+  const getStatValue = (value: number) => statsLoading ? '...' : value;
 
   return (
-    <div className="space-y-6">
-        <div className="bg-white p-2 rounded-lg shadow-md inline-block">
-            <nav className="flex space-x-1 sm:space-x-2">
-                <button onClick={() => setActiveTab('users')} className={`px-3 py-2 rounded-md font-medium text-sm ${activeTab === 'users' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>Users</button>
-                <button onClick={() => setActiveTab('notes')} className={`px-3 py-2 rounded-md font-medium text-sm ${activeTab === 'notes' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>Content</button>
-                <button onClick={() => setActiveTab('departments')} className={`px-3 py-2 rounded-md font-medium text-sm ${activeTab === 'departments' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>Departments</button>
-            </nav>
+    <div className="space-y-8">
+        <div>
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Dashboard Overview</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <StatCard 
+                    title="Total Users" 
+                    value={getStatValue(stats.users)} 
+                    icon={<UsersIcon className="h-7 w-7 text-blue-800"/>}
+                    colorClasses="bg-blue-100"
+                />
+                <StatCard 
+                    title="Total Notes" 
+                    value={getStatValue(stats.notes)} 
+                    icon={<ClipboardListIcon className="h-7 w-7 text-green-800"/>}
+                    colorClasses="bg-green-100"
+                />
+                <StatCard 
+                    title="Total Departments" 
+                    value={getStatValue(stats.departments)} 
+                    icon={<BuildingLibraryIcon className="h-7 w-7 text-purple-800"/>}
+                    colorClasses="bg-purple-100"
+                />
+            </div>
         </div>
 
         <div>
-            {activeTab === 'users' && <UserManagement />}
-            {activeTab === 'notes' && <NoteManagement />}
-            {activeTab === 'departments' && <DepartmentManagement />}
+            <div className="border-b border-gray-200">
+                <nav className="-mb-px flex space-x-6" aria-label="Tabs">
+                    <button 
+                        onClick={() => setActiveTab('users')} 
+                        className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center
+                            ${activeTab === 'users' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                    >
+                        <UsersIcon className="mr-2 h-5 w-5" /> Users
+                    </button>
+                     <button 
+                        onClick={() => setActiveTab('notes')} 
+                        className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center
+                            ${activeTab === 'notes' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                    >
+                        <ClipboardListIcon className="mr-2 h-5 w-5" /> Content
+                    </button>
+                     <button 
+                        onClick={() => setActiveTab('departments')} 
+                        className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center
+                            ${activeTab === 'departments' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                    >
+                        <BuildingLibraryIcon className="mr-2 h-5 w-5" /> Departments
+                    </button>
+                </nav>
+            </div>
+
+            <div className="mt-6">
+                {activeTab === 'users' && <UserManagement />}
+                {activeTab === 'notes' && <NoteManagement />}
+                {activeTab === 'departments' && <DepartmentManagement />}
+            </div>
         </div>
     </div>
   );

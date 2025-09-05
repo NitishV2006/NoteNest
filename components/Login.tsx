@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { UserRole } from '../types';
 
 export default function Login() {
-  const [isLogin, setIsLogin] = useState(true);
+  const [view, setView] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -15,13 +15,9 @@ export default function Login() {
   const navigate = useNavigate();
   
   useEffect(() => {
-    // If the user is authenticated, redirect them from the login page based on their role.
+    // If the user is authenticated, redirect them from the login page to their dashboard.
     if (user) {
-      if (user.role === UserRole.ADMIN) {
-        navigate('/dashboard');
-      } else {
-        navigate('/profile');
-      }
+      navigate('/dashboard');
     }
   }, [user, navigate]);
 
@@ -29,13 +25,13 @@ export default function Login() {
     // Clear previous errors and messages when switching forms
     clearError();
     setMessage('');
-  }, [isLogin, clearError]);
+  }, [view, clearError]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage('');
     try {
-      if (isLogin) {
+      if (view === 'login') {
         await login(email, password);
         // Navigation is now handled by the useEffect hook.
       } else {
@@ -53,9 +49,7 @@ export default function Login() {
   };
 
   const handleTabChange = (loginState: boolean) => {
-    setIsLogin(loginState);
-    clearError();
-    setMessage('');
+    setView(loginState ? 'login' : 'register');
     setRegistrationComplete(false);
   };
 
@@ -75,20 +69,20 @@ export default function Login() {
             <div className="flex border-b">
               <button
                 onClick={() => handleTabChange(true)}
-                className={`w-1/2 py-3 text-lg font-semibold text-center transition-colors duration-300 ${isLogin ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
+                className={`w-1/2 py-3 text-lg font-semibold text-center transition-colors duration-300 ${view === 'login' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
               >
                 Login
               </button>
               <button
                 onClick={() => handleTabChange(false)}
-                className={`w-1/2 py-3 text-lg font-semibold text-center transition-colors duration-300 ${!isLogin ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
+                className={`w-1/2 py-3 text-lg font-semibold text-center transition-colors duration-300 ${view === 'register' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
               >
                 Register
               </button>
             </div>
 
             <h2 className="text-2xl font-bold text-center text-gray-800">
-              {isLogin ? 'Welcome Back!' : 'Create an Account'}
+              {view === 'login' ? 'Welcome Back!' : 'Create an Account'}
             </h2>
 
             {message && <p className="text-green-600 text-sm text-center bg-green-100 p-3 rounded-md">{message}</p>}
@@ -100,8 +94,8 @@ export default function Login() {
                 </p>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {!isLogin && (
+            <form onSubmit={handleAuthSubmit} className="space-y-6">
+              {view === 'register' && (
                 <div>
                   <label htmlFor="name" className="block text-sm font-medium text-gray-700">Full Name</label>
                   <input id="name" type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
@@ -118,7 +112,7 @@ export default function Login() {
                 <input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
               </div>
 
-              {!isLogin && (
+              {view === 'register' && (
                 <div>
                   <label htmlFor="role" className="block text-sm font-medium text-gray-700">I am a</label>
                   <select id="role" value={role} onChange={(e) => setRole(e.target.value)} className="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
@@ -129,7 +123,7 @@ export default function Login() {
               )}
 
               <button type="submit" disabled={loading} className="w-full py-3 px-4 text-white bg-blue-600 rounded-md font-semibold hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-blue-300 disabled:cursor-not-allowed">
-                {loading ? 'Processing...' : isLogin ? 'Login' : 'Register'}
+                {loading ? 'Processing...' : view === 'login' ? 'Login' : 'Register'}
               </button>
             </form>
           </>

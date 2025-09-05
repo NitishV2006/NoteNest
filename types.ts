@@ -30,9 +30,3 @@ export interface Note {
   department_name?: string;
   created_at: string;
 }
-
-export interface QuizQuestion {
-  question: string;
-  options: string[];
-  answer: string;
-}

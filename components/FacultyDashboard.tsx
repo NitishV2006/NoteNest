@@ -1,8 +1,9 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import * as api from '../services/api';
 import { Note } from '../types';
-import { UploadIcon, DeleteIcon, EditIcon } from './Icons';
+import { UploadIcon, DeleteIcon, EditIcon, CheckIcon, XIcon } from './Icons';
 import Profile from './Profile';
 import { supabase } from '../services/supabase';
 
@@ -66,6 +67,10 @@ const MyNotes: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+    const [editingTitle, setEditingTitle] = useState('');
+    const [isUpdating, setIsUpdating] = useState(false);
+
     const fetchNotes = useCallback(async () => {
         if (user) {
             setLoading(true);
@@ -75,7 +80,7 @@ const MyNotes: React.FC = () => {
                 setMyNotes(notes);
             } catch (err) {
                 console.error("Failed to fetch faculty notes:", err);
-                setError("Could not load your notes due to a server permission issue. Please contact an administrator.");
+                setError(err instanceof Error ? err.message : "Could not load your notes. Please contact an administrator.");
             } finally {
                 setLoading(false);
             }
@@ -90,33 +95,73 @@ const MyNotes: React.FC = () => {
         const channel = supabase
             .channel('public:notes')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'notes' }, () => {
-                fetchNotes();
+                // To avoid conflicts with in-line editing, only refetch if not currently editing.
+                if (!editingNoteId) {
+                    fetchNotes();
+                }
             })
             .subscribe();
         
         return () => {
             supabase.removeChannel(channel);
         }
-    }, [fetchNotes]);
+    }, [fetchNotes, editingNoteId]);
 
-    const handleDelete = async (noteId: string, filePath: string) => {
+    const handleDelete = async (noteId: string) => {
         if (window.confirm('Are you sure you want to delete this note?')) {
             try {
-                await api.deleteNote(noteId, filePath);
-                // The realtime subscription will trigger a refetch.
+                await api.deleteNote(noteId);
+                // Optimistically update UI, then let realtime sync correct if needed.
+                setMyNotes(prev => prev.filter(note => note.id !== noteId));
             } catch (error) {
                 console.error("Failed to delete note", error);
-                alert("Could not delete the note.");
+                alert(`Could not delete the note: ${error instanceof Error ? error.message : 'Unknown error'}`);
             }
         }
     }
     
+    const handleStartEdit = (note: Note) => {
+        setEditingNoteId(note.id);
+        setEditingTitle(note.title);
+    };
+
+    const handleCancelEdit = () => {
+        setEditingNoteId(null);
+        setEditingTitle('');
+    };
+
+    const handleSaveEdit = async () => {
+        if (!editingNoteId || !editingTitle.trim()) return;
+        
+        const originalNotes = [...myNotes];
+        const noteToUpdate = myNotes.find(n => n.id === editingNoteId);
+        if (!noteToUpdate) return;
+        
+        // Optimistically update the UI for a responsive feel.
+        const updatedNote = { ...noteToUpdate, title: editingTitle.trim() };
+        setMyNotes(myNotes.map(n => n.id === editingNoteId ? updatedNote : n));
+        handleCancelEdit();
+
+        setIsUpdating(true);
+        try {
+            await api.updateNote(editingNoteId, editingTitle.trim());
+            // The API call succeeded, no need to do anything as UI is already updated.
+        } catch (err) {
+            console.error("Failed to update note", err);
+            alert("Could not update the note. Reverting changes.");
+            // If the API call fails, revert the optimistic UI update.
+            setMyNotes(originalNotes);
+        } finally {
+            setIsUpdating(false);
+        }
+    };
+
     if (loading) return <div className="text-center p-8">Loading your notes...</div>;
     
     if (error) return (
         <div className="bg-white p-6 rounded-lg shadow-md text-center text-red-600 bg-red-50 border border-red-200">
             <h3 className="font-bold text-lg">Could Not Load Notes</h3>
-            <p className="mt-2">{error}</p>
+            <p className="mt-2 whitespace-pre-wrap text-left">{error}</p>
         </div>
     );
 
@@ -135,11 +180,37 @@ const MyNotes: React.FC = () => {
                     <tbody className="bg-white divide-y divide-gray-200">
                         {myNotes.length > 0 ? myNotes.map(note => (
                             <tr key={note.id}>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{note.title}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                     {editingNoteId === note.id ? (
+                                        <input 
+                                            type="text"
+                                            value={editingTitle}
+                                            onChange={(e) => setEditingTitle(e.target.value)}
+                                            className="w-full px-2 py-1 border border-gray-300 rounded-md shadow-sm"
+                                            autoFocus
+                                            onKeyDown={(e) => e.key === 'Enter' && handleSaveEdit()}
+                                        />
+                                    ) : (
+                                        note.title
+                                    )}
+                                </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(note.created_at).toLocaleDateString()}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                    <button className="text-blue-600 hover:text-blue-900 mr-4" disabled title="Edit not available yet"><EditIcon /></button>
-                                    <button onClick={() => handleDelete(note.id, note.file_path)} className="text-red-600 hover:text-red-900"><DeleteIcon /></button>
+                                    {editingNoteId === note.id ? (
+                                        <div className="flex items-center justify-end space-x-4">
+                                            <button onClick={handleSaveEdit} disabled={isUpdating} className="text-green-600 hover:text-green-900 disabled:text-gray-400">
+                                                <CheckIcon />
+                                            </button>
+                                            <button onClick={handleCancelEdit} className="text-gray-600 hover:text-gray-900">
+                                                <XIcon />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center justify-end space-x-4">
+                                            <button onClick={() => handleStartEdit(note)} className="text-blue-600 hover:text-blue-900"><EditIcon /></button>
+                                            <button onClick={() => handleDelete(note.id)} className="text-red-600 hover:text-red-900"><DeleteIcon /></button>
+                                        </div>
+                                    )}
                                 </td>
                             </tr>
                         )) : (

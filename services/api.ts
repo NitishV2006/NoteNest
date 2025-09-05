@@ -1,20 +1,21 @@
 
 
-
-
 import { supabase } from './supabase';
-import { User, Note, Department, UserRole, QuizQuestion } from '../types';
+import { User, Note, Department, UserRole } from '../types';
 
 // --- Auth API ---
 
 export const login = async (email: string, pass: string): Promise<void> => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
+    const { error } = await supabase.auth.signInWithPassword({
+        email: email.toLowerCase().trim(),
+        password: pass,
+    });
     if (error) throw error;
 };
 
 export const register = async (name: string, email: string, pass: string, role: string) => {
     return supabase.auth.signUp({
-        email,
+        email: email.toLowerCase().trim(),
         password: pass,
         options: {
             data: { name, role }
@@ -26,6 +27,12 @@ export const logout = async (): Promise<void> => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
 };
+
+export const updateUserPassword = async (password: string): Promise<void> => {
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) throw error;
+};
+
 
 // --- Profile & User API (using relational queries) ---
 
@@ -86,8 +93,6 @@ export const updateProfile = async (userId: string, data: Partial<User>): Promis
 };
 
 export const getUsers = async (): Promise<User[]> => {
-    // To fix a potential RLS issue with joins, we fetch users and departments in separate
-    // queries and combine them on the client. This is a more resilient pattern.
     const { data: users, error: usersError } = await supabase
         .from('profiles')
         .select('id, name, email, role, department_id');
@@ -95,20 +100,13 @@ export const getUsers = async (): Promise<User[]> => {
     if (usersError) throw usersError;
     if (!users) return [];
 
-    // Fetch all departments to map department_id to department_name.
-    // We wrap this in a catch block so that the user list can still load
-    // even if the departments list fails for some reason.
     const departments = await getDepartments().catch(error => {
-        console.warn("Could not fetch departments for admin user list. Department names will be missing.", error);
-        return []; // On failure, proceed with an empty list of departments.
+        console.warn("Could not fetch departments for admin user list.", error);
+        return [];
     });
     
-    // FIX: The Map constructor requires an array of tuples `[key, value]`.
-    // We explicitly set the return type of map() to `[string, string]` to ensure
-    // TypeScript doesn't infer it as `string[]`, which would cause a type error.
     const departmentMap = new Map<string, string>(departments.map((dept): [string, string] => [dept.id, dept.name]));
     
-    // Enrich user data with department names from our map.
     return users.map(user => ({
         ...user,
         department_name: user.department_id ? departmentMap.get(user.department_id) : undefined,
@@ -116,7 +114,6 @@ export const getUsers = async (): Promise<User[]> => {
 };
 
 export const deleteUser = async (userId: string): Promise<void> => {
-    // Call the secure edge function to delete the user from auth.users
     const { data, error } = await supabase.functions.invoke('delete-user', {
         body: { userId },
     });
@@ -162,37 +159,45 @@ export const deleteDepartment = async (id: string): Promise<void> => {
 };
 
 
-// --- Notes API (now querying 'notes' table directly) ---
+// --- Notes API ---
 
-const NOTE_COLUMNS = 'id, title, file_path, faculty_id, department_id, created_at';
-
+/**
+ * [RE-ARCHITECTED] Fetches all notes by calling a secure RPC database function.
+ * This is the definitive fix for all note-fetching errors.
+ */
 export const getAllNotes = async (): Promise<Note[]> => {
-    const { data, error } = await supabase
-        .from('notes')
-        .select(NOTE_COLUMNS)
-        .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data;
+    const { data, error } = await supabase.rpc('get_all_notes_with_details');
+    
+    if (error) {
+        console.error("RPC Error fetching all notes:", JSON.stringify(error, null, 2));
+        
+        let userMessage = `Failed to fetch notes due to a database error. Please contact an administrator.`;
+        
+        // PGRST202: PostgREST error for "routine not found"
+        // 42883: Postgres native error for 'undefined_function'
+        if (error.code === 'PGRST202' || error.code === '42883') {
+            userMessage = `Database function missing: The app requires a function named 'get_all_notes_with_details' to fetch notes, but it was not found.`;
+            userMessage += `\n\nACTION REQUIRED: An administrator must run the setup SQL script in the Supabase SQL Editor to create this function. You can ask the AI assistant for the correct SQL query.`;
+        } else if (error.message.includes('permission denied')) {
+            userMessage = `Database permission error: Your user role does not have permission to run the 'get_all_notes_with_details' function.`;
+            userMessage += `\n\nACTION REQUIRED: An administrator must grant EXECUTE permission on this function to the 'authenticated' role.`;
+        }
+        
+        const details = `Technical Details: ${error.message} (Code: ${error.code})`;
+        throw new Error(`${userMessage}\n\n${details}`);
+    }
+    return (data as Note[]) || [];
 };
 
-export const getNotesForStudent = async (departmentId: string): Promise<Note[]> => {
-    const { data, error } = await supabase
-        .from('notes')
-        .select(NOTE_COLUMNS)
-        .eq('department_id', departmentId)
-        .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data;
-};
 
+/**
+ * [FIXED] Fetches notes for a specific faculty member by calling the main RPC function
+ * and filtering the results on the client side. This ensures consistency and leverages
+ * the robust, RLS-safe data fetching method.
+ */
 export const getNotesByFaculty = async (facultyId: string): Promise<Note[]> => {
-    const { data, error } = await supabase
-        .from('notes')
-        .select(NOTE_COLUMNS)
-        .eq('faculty_id', facultyId)
-        .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data;
+    const allNotes = await getAllNotes();
+    return allNotes.filter(note => note.faculty_id === facultyId);
 };
 
 export const uploadNote = async (title: string, file: File, facultyId: string, departmentId: string): Promise<void> => {
@@ -212,37 +217,55 @@ export const uploadNote = async (title: string, file: File, facultyId: string, d
         });
     
     if (insertError) {
-      // If DB insert fails, try to clean up the uploaded file.
       await supabase.storage.from('notes').remove([fileName]);
       throw insertError;
     }
 };
 
-export const deleteNote = async (noteId: string, filePath: string): Promise<void> => {
-    const { error: storageError } = await supabase.storage.from('notes').remove([filePath]);
-    if (storageError) {
-        console.error("Could not delete file from storage, but proceeding to delete DB record", storageError);
-    }
-    
-    const { error: dbError } = await supabase.from('notes').delete().eq('id', noteId);
-    if (dbError) throw dbError;
+export const updateNote = async (noteId: string, title: string): Promise<Note> => {
+    const { data, error } = await supabase
+        .from('notes')
+        .update({ title })
+        .eq('id', noteId)
+        .select()
+        .single();
+
+    if (error) throw error;
+    if (!data) throw new Error("Note not found or permission denied.");
+    return data;
 };
 
-// --- Gemini API via Supabase Edge Function ---
-export const generateQuizFromText = async (noteText: string): Promise<QuizQuestion[]> => {
-    const { data, error } = await supabase.functions.invoke('generate-quiz', {
-        body: { noteText },
+/**
+ * Deletes a note by invoking a secure Edge Function.
+ */
+export const deleteNote = async (noteId: string): Promise<void> => {
+    const { error } = await supabase.functions.invoke('delete-note', {
+        body: { noteId },
     });
 
     if (error) {
-        // The edge function should return a structured error, but we handle network/invoke errors too.
-        throw new Error(`Quiz generation failed: ${data?.error || error.message}`);
+        // @ts-ignore
+        const functionError = error.context?.function_error || error.message;
+        throw new Error(`Failed to delete note: ${functionError}`);
     }
-
-    if (!Array.isArray(data)) {
-        console.error("Unexpected response from quiz function:", data);
-        throw new Error("The quiz generator returned an invalid format.");
-    }
-    
-    return data as QuizQuestion[];
 };
+
+// --- Count API for Dashboard Stats ---
+
+export const getUsersCount = async (): Promise<number> => {
+    const { count, error } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
+    if (error) throw error;
+    return count || 0;
+}
+
+export const getNotesCount = async (): Promise<number> => {
+    const { count, error } = await supabase.from('notes').select('*', { count: 'exact', head: true });
+    if (error) throw error;
+    return count || 0;
+}
+
+export const getDepartmentsCount = async (): Promise<number> => {
+    const { count, error } = await supabase.from('departments').select('*', { count: 'exact', head: true });
+    if (error) throw error;
+    return count || 0;
+}
